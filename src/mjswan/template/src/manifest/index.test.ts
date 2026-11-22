@@ -80,6 +80,48 @@ const MANIFEST: Manifest = {
 };
 
 describe('parseManifest', () => {
+  it('builds a scene\'s companions with their MDPs, and never lists them as policies', async () => {
+    const scene = MANIFEST.projects[0].scenes[0];
+    const withCompanion: Manifest = {
+      ...MANIFEST,
+      format: 11,
+      projects: [
+        {
+          ...MANIFEST.projects[0],
+          scenes: [
+            {
+              ...scene,
+              keep_on_reset: { entities: ['robot', 'gear'], terminations: ['kick_done'] },
+              companions: [
+                {
+                  id: 'g1_walk',
+                  name: 'G1 Walk',
+                  mdp: 'mdp_1',
+                  onnx: 'policy/g1_walk.onnx',
+                  policy_joint_names: ['g1/left_hip_pitch_joint'],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const { source, requested } = fakeSource();
+    const entry = parseManifest(withCompanion, source).projects[0].scenes[0];
+    expect(entry.policies.map((p) => p.id)).toEqual(['walk', 'run']);
+    const input = await entry.buildScene();
+    expect(input.companions).toHaveLength(1);
+    expect(input.companions![0].config).toMatchObject({
+      name: 'G1 Walk',
+      policy_joint_names: ['g1/left_hip_pitch_joint'],
+      actions: { joint_pos: { type: 'joint_position' } },
+    });
+    expect(requested).toContain('demo/humanoid/policy/g1_walk.onnx');
+    expect(input.keepOnReset).toEqual({ entities: ['robot', 'gear'], terminations: ['kick_done'] });
+    // A scene without them builds none.
+    expect((await parseManifest(MANIFEST, source).projects[0].scenes[0].buildScene()).companions).toEqual([]);
+  });
+
   it('builds a single-project catalog with scene/policy/splat entries carrying ids', () => {
     const catalog = parseManifest(MANIFEST, fakeSource().source);
     expect(catalog.projects.map((p) => [p.id, p.name, p.default])).toEqual([['demo', 'Demo', true]]);

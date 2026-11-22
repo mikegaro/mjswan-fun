@@ -391,6 +391,7 @@ def scene_entry(
     """A scene's manifest entry; its paths resolve against the scene directory.
     ``licenses`` names the project's license files (:func:`.credit.license_names`), and
     ``graphics`` is :func:`graphics_entry`'s, read while the scene still has its model."""
+    _check_keep_on_reset(scene, mdps)
     return {
         "id": scene.id,
         "name": scene.name,
@@ -399,6 +400,7 @@ def scene_entry(
         "camera": (scene.viewer or ViewerConfig()).to_dict(),
         "graphics": graphics,
         **({"terrain_data": scene.terrain_data} if scene.terrain_data else {}),
+        **({"keep_on_reset": scene.keep_on_reset} if scene.keep_on_reset else {}),
         **({"splat_section": True} if scene.splat_section and not scene.splats else {}),
         **({"splats": [splat_entry(s) for s in scene.splats]} if scene.splats else {}),
         **(
@@ -406,8 +408,39 @@ def scene_entry(
         ),
         **({"credits": credits} if (credits := scene_credits(scene, licenses)) else {}),
         "mdps": mdps,
-        "policies": policies,
+        "policies": [p for p, c in zip(policies, scene.policies) if not c.companion],
+        **(
+            {"companions": companions}
+            if (
+                companions := [
+                    p for p, c in zip(policies, scene.policies) if c.companion
+                ]
+            )
+            else {}
+        ),
     }
+
+
+def _check_keep_on_reset(scene: SceneConfig, mdps: list[dict[str, Any]]) -> None:
+    """Refuse a ``keep_on_reset`` naming a termination no MDP on the scene has: it would
+    never fire, and the entities would reset as if it were not there."""
+    if not scene.keep_on_reset:
+        return
+    known: set[str] = set()
+    for mdp in mdps:
+        for name, entry in (mdp.get("terminations") or {}).items():
+            # A fused graph's lanes carry its terms' names, which the runtime reports.
+            lanes = entry.get("lanes") if isinstance(entry, dict) else None
+            if lanes:
+                known.update(lane["name"] for lane in lanes)
+            else:
+                known.add(name)
+    unknown = sorted(set(scene.keep_on_reset["terminations"]) - known)
+    if unknown:
+        raise ValueError(
+            f"Scene {scene.name!r}: keep_on_reset names terminations {unknown}, which no "
+            f"policy's MDP has (it has {sorted(known)}), so they would never keep anything."
+        )
 
 
 #: MuJoCo's Filament renderer's own values for the flags the build reads, and the one it

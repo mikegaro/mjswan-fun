@@ -154,6 +154,16 @@ export interface ManifestScene {
   credits?: ManifestCredit[];
   mdps: ManifestMdp[];
   policies: ManifestPolicy[];
+  /**
+   * Policies that run every control step beside the selected one, each driving its own
+   * robot (format 11). Never listed in the policy selector.
+   */
+  companions?: ManifestPolicy[];
+  /**
+   * Entities an episode ending by one of `terminations` leaves where they are rather than
+   * back at the keyframe (format 11).
+   */
+  keep_on_reset?: { entities: string[]; terminations: string[] };
 }
 export interface ManifestProject {
   /** `name2id(name)`, unique in the document: the project's directory and `?project=` value. */
@@ -300,9 +310,9 @@ export function sanitizeName(name: string): string {
  * 9 a camera sensor's descriptor, an image-shaped policy input, a skin modelled on
  * the robot (`fit: 'modelled'`), with `align`, `rest_qpos`, a solid material and
  * `hide_tendons`, and a scene's `graphics`; 10 an action term's DC motor
- * `saturation_effort` and `velocity_limit`.
+ * `saturation_effort` and `velocity_limit`; 11 a scene's `companions` and `keep_on_reset`.
  */
-export const MAX_DOCUMENT_FORMAT = 10;
+export const MAX_DOCUMENT_FORMAT = 11;
 
 /**
  * Refuse a document this reader cannot read: one without a `format`, or one newer than it
@@ -534,6 +544,8 @@ function toSceneEntry(
         model: source(inScene(dir, scene.scene)),
         modelFormat: scene.scene.endsWith('.mjb') ? 'mjb' : 'mjz',
         policy: policy ? buildPolicy(dir, scene, policy, source) : null,
+        companions: (scene.companions ?? []).map((c) => buildPolicy(dir, scene, c, source)),
+        keepOnReset: scene.keep_on_reset ?? null,
         splat: splat ? buildSplat(dir, splat, source) : null,
         skin: skin ? buildSkin(skin) : null,
         viewer: toViewerConfig(scene.camera, format),

@@ -45,6 +45,11 @@ export interface ResetChain {
   context: EventContext;
   /** A thunk, since it has to be read after the reset events' writes land. */
   buildState?: () => PolicyState | undefined;
+  /**
+   * Runs after the events, before anything reads the state: puts back what this reset
+   * keeps (a scene's `keep_on_reset`), over what the events wrote.
+   */
+  afterEvents?: () => void;
 }
 
 /**
@@ -54,6 +59,7 @@ export interface ResetChain {
  */
 export async function applyResetTerms(chain: ResetChain): Promise<void> {
   await chain.events?.onReset(chain.context);
+  chain.afterEvents?.();
   chain.policy?.reset(chain.buildState?.());
   await chain.actions?.reset();
   await chain.commands.resetTerms();

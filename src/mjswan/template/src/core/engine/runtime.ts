@@ -82,6 +82,13 @@ import {
   type OnnxActionProcessConfig,
 } from '../action/OnnxActionProcess';
 import { applyResetTerms } from './resetChain';
+import {
+  CompanionPolicy,
+  entityJointAddresses,
+  restoreJoints,
+  snapshotJoints,
+  type CompanionHost,
+} from './companion';
 import { ControlStep } from './controlStep';
 import { decimationFor } from './decimation';
 import { yieldToBrowser } from './yieldToBrowser';
@@ -134,6 +141,13 @@ function expandSceneBounds(box: THREE.Box3, object: THREE.Object3D): void {
 }
 
 const EMPTY_ACTIONS = new Float32Array(0);
+
+/** What an action term reads beyond the model: its policy's commands, graphs and slots. */
+export type ActionDeps = {
+  commandManager: CommandManager;
+  graphs: OnnxSessionCache;
+  readSlot: SlotReader;
+};
 /** Only the `direct` muscle mode reads an actuator range; the rest carry none. */
 const EMPTY_CTRL_RANGE = new Float32Array(0);
 /** What `applyAction` implements; a term of any other type is skipped with a warning. */
@@ -218,6 +232,9 @@ export type ResolvedPolicy = {
   plugins?: EnginePlugins;
 };
 
+/** A scene's `keep_on_reset`: which entities an episode's end keeps, and for which ends. */
+export type KeepOnReset = { entities: string[]; terminations: string[] };
+
 /** A splat with its bytes resolved. */
 export type ResolvedSplat = {
   data: ArrayBuffer;
@@ -237,6 +254,13 @@ export type ResolvedScene = {
   /** `mjz` unless the build wrote the scene from `add_scene(model=...)`. */
   modelFormat?: ModelFormat;
   policy?: ResolvedPolicy | null;
+  /** Policies that run beside `policy`, each on its own robot. */
+  companions?: ResolvedPolicy[];
+  /**
+   * Entities an episode ending by one of `terminations` leaves where they are, rather
+   * than back at the keyframe. A reset someone asks for still resets them.
+   */
+  keepOnReset?: KeepOnReset | null;
   splat?: ResolvedSplat | null;
   skin?: ResolvedSkin | null;
   viewer?: ViewerConfig | null;
@@ -396,6 +420,12 @@ export class mjswanRuntime {
   private scenePrefixed = false;
   /** Loaded again onto the new model by a rebuild. */
   private currentPolicy: ResolvedPolicy | null = null;
+  /** Policies stepped beside the active one, each on its own robot (format 11). */
+  private companions: CompanionPolicy[] = [];
+  /** What they were loaded from, kept to rebuild them over a rebuilt model. */
+  private companionInputs: ResolvedPolicy[] = [];
+  /** The scene's `keep_on_reset`, if any. */
+  private keepOnReset: KeepOnReset | null = null;
   /** Parent of the camera and hands: what XR locomotion moves. Identity outside a session. */
   private readonly xrRig: THREE.Group;
   private readonly xrClock = new THREE.Clock(false);
@@ -636,6 +666,9 @@ export class mjswanRuntime {
   async loadEnvironment(scene: ResolvedScene): Promise<void> {
     // Before the graph swap below, or a running term steps a session it just released.
     await this.stop();
+    await this.clearCompanions();
+    this.companionInputs = scene.companions ?? [];
+    this.keepOnReset = scene.keepOnReset ?? null;
     this.scenePlugins = scene.plugins ?? {};
     this.terrainData = scene.terrainData ?? null;
     // Before the model is built: it decides whether the grab anchor is injected.
@@ -687,6 +720,7 @@ export class mjswanRuntime {
 
     // Builds the MDP's event manager and fires its startup pass before the reset.
     await this.loadPolicyConfig(scene.policy ?? null);
+    await this.loadCompanions();
 
     this.applyViewerConfig(scene.viewer ?? null);
 
@@ -1308,6 +1342,7 @@ export class mjswanRuntime {
 
     // Drop everything holding the old model before freeing it: command terms read it every frame.
     this.commandManager.clear();
+    await this.clearCompanions();
     this.eventManager = null;
     this.onnxModule = null;
     this.modelFieldDefaults = null;
@@ -1334,6 +1369,7 @@ export class mjswanRuntime {
     // New body groups, all drawn; the skin's body ids hold, as the hands are appended.
     this.drawRobotUnderSkin();
     await this.loadPolicyConfig(this.currentPolicy, kept);
+    await this.loadCompanions();
     if (motion !== null) await this.setSelectedMotion(motion);
     for (const [id, value] of Object.entries(values)) this.commandManager.setValue(id, value);
     for (const { id, enabled } of drawings) this.debugVizSet.set(id, enabled);
@@ -1495,13 +1531,16 @@ export class mjswanRuntime {
    */
   private async beginControlStep(): Promise<void> {
     if (this.resetRequested) await this.applyRequestedReset();
-    if (!this.policyRunner || !this.policyStateBuilder) return;
-    // A traced command's update lands asynchronously; mjlab's step has it before the observation.
-    await this.commandManager.settled();
-    const state = this.policyStateBuilder.build();
-    const obs = await this.policyRunner.collectObservationsByKey(state);
-    const fresh = await this.runOnnxInference(obs);
-    await this.processActions(fresh);
+    if (this.policyRunner && this.policyStateBuilder) {
+      // A traced command's update lands asynchronously; mjlab's step has it before the observation.
+      await this.commandManager.settled();
+      const state = this.policyStateBuilder.build();
+      const obs = await this.policyRunner.collectObservationsByKey(state);
+      const fresh = await this.runOnnxInference(obs);
+      await this.processActions(fresh);
+    }
+    // Held: a scene load can swap the list mid-step.
+    for (const companion of this.companions) await companion.beginStep();
   }
 
   /** The part of a control step after the physics. */
@@ -1513,21 +1552,37 @@ export class mjswanRuntime {
     // Pre-forward, as in mjlab: derived state lags by one substep, consistently.
     // mj_step's own reset lands on qpos0 with no reset events: mjswan's full reset follows.
     let autoReset = diverged;
+    let keepEntities = false;
     // Held across the awaits below: `setPolicy` can null the field mid-step.
     const terminations = this.terminationManager;
     if (!autoReset && terminations && this.policyStateBuilder) {
       const postState = this.policyStateBuilder.build();
-      autoReset = (await terminations.evaluate(postState)).done;
+      const result = await terminations.evaluate(postState);
+      autoReset = result.done;
+      // Only when every term that fired is one the scene keeps its entities for.
+      const keep = this.keepOnReset?.terminations;
+      keepEntities =
+        !!keep && result.reasons.length > 0 && result.reasons.every((r) => keep.includes(r));
     }
     if (autoReset) {
       // Awaited so the writes precede the forward; caught so a failure costs a reset.
       try {
-        await this.resetSimulationState({ forward: false });
+        await this.resetSimulationState({ forward: false, keepCompanions: true, keepEntities });
       } catch (error) {
         console.warn('[mjswanRuntime] reset terms failed:', error);
       }
       // Last, as in mjlab's `_reset_idx`.
       terminations?.reset();
+    }
+    // A companion's episode is its own: the reset above kept its robot, and only its
+    // own termination resets it.
+    const companions = this.companions;
+    const companionReset = new Array<boolean>(companions.length).fill(false);
+    for (let i = 0; i < companions.length; i++) {
+      if (await companions[i].terminated()) {
+        await companions[i].resetOwnRobot();
+        companionReset[i] = true;
+      }
     }
 
     // The one forward: clears the loop's staleness and publishes a reset's writes.
@@ -1535,6 +1590,7 @@ export class mjswanRuntime {
     this.updateCachedState();
 
     this.commandManager.update(target, autoReset);
+    companions.forEach((companion, i) => companion.endStep(companionReset[i]));
     this.debugVizSet.update();
     // Awaited so `mode="interval"` terms resolve in config order.
     try {
@@ -1542,6 +1598,47 @@ export class mjswanRuntime {
     } catch (error) {
       console.warn('[mjswanRuntime] interval events failed:', error);
     }
+  }
+
+  /** Build every companion of the scene against the current model (format 11). */
+  private async loadCompanions(): Promise<void> {
+    if (!this.mjModel || !this.mjData || this.companionInputs.length === 0) return;
+    const host: CompanionHost = {
+      mujoco: this.mujoco,
+      mjModel: this.mjModel,
+      mjData: this.mjData,
+      scene: this.scene,
+      bodies: this.bodies,
+      mujocoRoot: this.mujocoRoot,
+      modelDefaults: this.modelFieldDefaults,
+      rng: this.termRng,
+      stepDt: this.timestep * this.decimation,
+      buildActionManager: (config, runner, stateBuilder, budget, deps) =>
+        this.buildActionManager(config, runner, stateBuilder, budget, deps),
+      jointBias: (config) => buildJointBias(config),
+    };
+    for (const input of this.companionInputs) {
+      try {
+        this.companions.push(
+          await CompanionPolicy.load(host, {
+            config: input.config,
+            onnx: input.onnx,
+            graphs: input.graphs,
+          }),
+        );
+      } catch (error) {
+        // One companion failing leaves the scene and the others running.
+        console.error('[mjswanRuntime] companion failed to load:', error);
+      }
+    }
+    this.mujoco.mj_forward(this.mjModel, this.mjData);
+    this.updateCachedState();
+  }
+
+  private async clearCompanions(): Promise<void> {
+    const outgoing = this.companions;
+    this.companions = [];
+    await Promise.all(outgoing.map((companion) => companion.dispose()));
   }
 
   /** `kept` holds a rebuild's ONNX sessions: bound to no model, they are reused, not rebuilt. */
@@ -1795,11 +1892,20 @@ export class mjswanRuntime {
     }
   }
 
-  private buildActionManager(
+  /**
+   * `deps` are what a term reads beyond the model: the active policy's by default, a
+   * companion's own for a companion (see `./companion`).
+   */
+  buildActionManager(
     config: PolicyConfig,
     runner: PolicyRunner,
     stateBuilder: PolicyStateBuilder,
     budget: BufferBudget,
+    deps: ActionDeps = {
+      commandManager: this.commandManager,
+      graphs: this.policyGraphs,
+      readSlot: this.readOnnxSlot,
+    },
   ): ActionManager | null {
     const jointNames = runner.getPolicyJointNames();
     const targetActuator = this.targetActuatorTest();
@@ -2000,7 +2106,7 @@ export class mjswanRuntime {
       if (controlType === 'joint_position_command') {
         mapping = stateBuilder.getModelControlMappingFor(patterns);
         const commandName = String(actionTerm.command_name);
-        const width = this.commandManager.getCommand(commandName).length;
+        const width = deps.commandManager.getCommand(commandName).length;
         if (mapping && width !== mapping.qposAdr.length) {
           console.error(
             `[PolicyRunner] Action term "${termKey}": command "${commandName}" is ${width} ` +
@@ -2040,7 +2146,7 @@ export class mjswanRuntime {
       if (controlType === 'joint_position_reference' || controlType === 'joint_position_command') {
         entry.commandName = String(actionTerm.command_name ?? 'motion');
       }
-      const traced = actionTerm.process ? this.buildTracedProcess(termKey, actionTerm) : null;
+      const traced = actionTerm.process ? this.buildTracedProcess(termKey, actionTerm, deps) : null;
       if (actionTerm.process && !traced) continue;
       results.push({ name: termKey, term: entry, traced });
     }
@@ -2062,11 +2168,15 @@ export class mjswanRuntime {
   }
 
   /** A traced term's process (and reset) graph, or `null` with an error when one is missing. */
-  private buildTracedProcess(termKey: string, actionTerm: ActionConfigEntry): OnnxActionProcess | null {
+  private buildTracedProcess(
+    termKey: string,
+    actionTerm: ActionConfigEntry,
+    deps: ActionDeps,
+  ): OnnxActionProcess | null {
     const process = actionTerm.process as OnnxActionProcessConfig;
     const reset = (actionTerm.reset as OnnxActionGraphConfig | undefined) ?? null;
-    const processSession = this.policyGraphs.get(process.onnx);
-    const resetSession = reset ? this.policyGraphs.get(reset.onnx) : null;
+    const processSession = deps.graphs.get(process.onnx);
+    const resetSession = reset ? deps.graphs.get(reset.onnx) : null;
     if (!processSession || (reset && !resetSession)) {
       console.error(`[PolicyRunner] Action term "${termKey}": its traced graph did not load, skipping.`);
       return null;
@@ -2075,7 +2185,7 @@ export class mjswanRuntime {
       process: processSession,
       reset: resetSession,
       rng: this.termRng,
-      readSlot: this.readOnnxSlot,
+      readSlot: deps.readSlot,
     });
   }
 
@@ -2120,10 +2230,24 @@ export class mjswanRuntime {
    * cannot await still gets an immediately-reset sim. Pass `forward: false` when the
    * caller runs its own `mj_forward` right after.
    */
-  private async resetSimulationState({ forward = true }: { forward?: boolean } = {}): Promise<void> {
+  private async resetSimulationState({
+    forward = true,
+    keepCompanions = false,
+    keepEntities = false,
+  }: { forward?: boolean; keepCompanions?: boolean; keepEntities?: boolean } = {}): Promise<void> {
     if (!this.mjModel || !this.mjData) {
       return;
     }
+    // Taken before the reset, put back after its events (`afterEvents`).
+    const mjModel = this.mjModel;
+    const keptEntities =
+      keepEntities && this.keepOnReset
+        ? this.keepOnReset.entities.map((entity) =>
+            snapshotJoints(this.mjData!, entityJointAddresses(mjModel, `${entity}/`)),
+          )
+        : [];
+    // The active policy's own episode ending is not the companions': their robots stay.
+    const kept = keepCompanions ? this.companions.map((c) => [c, c.snapshot()] as const) : [];
     if (this.mjModel.nkey > 0) {
       this.mujoco.mj_resetDataKeyframe(this.mjModel, this.mjData, 0);
     } else {
@@ -2141,6 +2265,7 @@ export class mjswanRuntime {
         qvel[i] = this.initialQvel[i];
       }
     }
+    for (const [companion, state] of kept) companion.restore(state);
     // After the qpos writes above, which do not cover the injected hand bodies.
     if (this.modelHasHands) this.handMocap.park(this.mjData);
     this.interaction.onReset();
@@ -2170,7 +2295,16 @@ export class mjswanRuntime {
       context: this.eventContext(),
       // A thunk so it reads state after the events land.
       buildState: () => this.policyStateBuilder?.build(),
+      afterEvents: () => {
+        if (!this.mjModel || !this.mjData || keptEntities.length === 0) return;
+        for (const snapshot of keptEntities) restoreJoints(this.mjData, snapshot);
+        // The reset cleared the derived state (`xpos`, `xquat`) a term reads an entity's
+        // pose from; a command placing things around a kept robot needs it where it is.
+        this.mujoco.mj_forward(this.mjModel, this.mjData);
+      },
     });
+    // The sim reset above put every companion's robot back to the keyframe too.
+    if (!keepCompanions) for (const companion of this.companions) await companion.resetTerms();
 
     // Re-checked: the scene can be disposed while the reset events are in flight.
     if (forward && this.mjModel && this.mjData) {
@@ -2197,7 +2331,9 @@ export class mjswanRuntime {
       this.mujoco,
       this.mjModel,
       this.mjData,
-      this.actionManager?.terms ?? [],
+      this.companions.length > 0
+        ? [...(this.actionManager?.terms ?? []), ...this.companions.flatMap((c) => c.actionTerms)]
+        : (this.actionManager?.terms ?? []),
       this.decimation,
       undefined,
       // Per substep, not per control step, as mjlab rolls it from
@@ -2617,6 +2753,7 @@ export class mjswanRuntime {
     void this.xrSession?.end().catch(() => {});
     // Await stop so the loop halts before we free the state it reads.
     await this.stop();
+    await this.clearCompanions();
     this.policyRunner = null;
     this.policyStateBuilder = null;
 

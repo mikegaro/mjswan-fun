@@ -88,6 +88,16 @@ export interface SceneInput {
    */
   modelFormat?: ModelFormat;
   policy?: PolicyInput | null;
+  /**
+   * Policies that run every control step beside `policy`, each driving its own robot
+   * through its own MDP. They stay loaded across `setPolicy`.
+   */
+  companions?: PolicyInput[];
+  /**
+   * Entities an episode ending by one of `terminations` leaves where they are (format 11):
+   * a kicked ball coming to rest starts the next kick from wherever the robot is.
+   */
+  keepOnReset?: { entities: string[]; terminations: string[] } | null;
   splat?: SplatInput | null;
   /** A file that fails to load warns and leaves the scene without it. */
   skin?: SkinInput | null;

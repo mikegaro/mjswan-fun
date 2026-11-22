@@ -334,6 +334,97 @@ def _euler_quat(deg: tuple[float, float, float]) -> np.ndarray:
     return quat
 
 
+def add_shape(spec, parent, shape: Shape, origin, density: float) -> None:
+    """One shape on ``parent``: a gold or navy visual mesh and hidden convex pieces."""
+    mat = spec.add_material(
+        name=f"{shape.name}_mat", rgba=list(shape.rgba), specular=0.4, shininess=0.5
+    )
+    verts, faces = visual_mesh(shape.visual, origin)
+    mesh = spec.add_mesh(name=f"{shape.name}_visual", uservert=verts.ravel().tolist(),
+                         userface=faces.ravel().tolist())  # fmt: skip
+    mesh.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
+    parent.add_geom(name=f"{shape.name}_visual", type=mujoco.mjtGeom.mjGEOM_MESH, meshname=mesh.name,
+                    material=mat.name, contype=0, conaffinity=0, group=1, density=0)  # fmt: skip
+    for i, trap in enumerate(shape.collision):
+        piece = spec.add_mesh(
+            name=f"{shape.name}_col{i}",
+            uservert=prism(trap, origin).ravel().tolist(),
+        )
+        parent.add_geom(name=f"{shape.name}_col{i}", type=mujoco.mjtGeom.mjGEOM_MESH, meshname=piece.name,
+                        group=3, rgba=[0.8, 0.3, 0.3, 0.5], density=density, friction=FRICTION)  # fmt: skip
+
+
+def a_opening_x(shapes: list[Shape], height: float = 0.05) -> tuple[float, float]:
+    """The gap between the A's legs at ``height`` above the floor, in logo x (metres)."""
+    a = next(s for s in shapes if s.name == "A")
+    runs = _union_at(a.visual, height, +1)
+    if len(runs) != 2:
+        raise ValueError(f"expected the A's two legs at z={height}, got {runs}")
+    return runs[0][1], runs[1][0]
+
+
+def gear_centre(shapes: list[Shape]) -> tuple[float, float]:
+    """The gear's circle centre (logo x, z in metres), fitted to its outer rim.
+
+    The gear is a partial ring, so the mean of its outline is off-centre. Each pass fits
+    a circle to the outermost fifth of the outline's points around the last centre.
+    """
+    gear = next(s for s in shapes if s.name == "gear")
+    pts = np.array(
+        [(x, z) for za, xla, xra, zb, xlb, xrb in gear.visual
+         for x, z in ((xla, za), (xra, za), (xlb, zb), (xrb, zb))]
+    )  # fmt: skip
+    centre = pts.mean(0)
+    for _ in range(10):
+        rim = pts[
+            np.hypot(*(pts - centre).T) > np.percentile(np.hypot(*(pts - centre).T), 80)
+        ]
+        # Linear circle fit: |p|^2 = 2 p.c + (r^2 - |c|^2).
+        a = np.c_[2 * rim, np.ones(len(rim))]
+        centre = np.linalg.lstsq(a, (rim**2).sum(1), rcond=None)[0][:2]
+    return float(centre[0]), float(centre[1])
+
+
+def letters_spec(path: Path = LOGO_PATH) -> mujoco.MjSpec:
+    """The four letters as one fixed body: a scene entity for other demos.
+
+    The logo x origin is the middle of the A's opening, so placing the body at a point
+    puts that opening there.
+
+    The body carries the spotlight, so it stays on the logo however the logo is placed:
+    ``SPOT_HEIGHT`` above the floor and in front of the letters, aimed at the middle of
+    the whole logo, gear included.
+    """
+    shapes = trace_logo(path)
+    lo, hi = a_opening_x(shapes)
+    origin = (lo + hi) / 2
+    spec = mujoco.MjSpec()
+    body = spec.worldbody.add_body(name="letters")
+    for shape in shapes[:4]:
+        add_shape(spec, body, shape, (origin, 0.0), density=1000.0)
+
+    xs = [x for s in shapes for t in s.visual for x in (t[1], t[2], t[4], t[5])]
+    zs = [z for s in shapes for t in s.visual for z in (t[0], t[3])]
+    aim = np.array([(min(xs) + max(xs)) / 2 - origin, 0.0, (min(zs) + max(zs)) / 2])
+    pos = aim + np.array([0.0, -SPOT_HEIGHT / 2, SPOT_HEIGHT - aim[2]])  # front is -y
+    body.add_light(
+        name="spot", pos=pos.tolist(), dir=(aim - pos).tolist(),
+        type=mujoco.mjtLightType.mjLIGHT_SPOT, cutoff=SPOT_CUTOFF, exponent=8,
+        castshadow=True, diffuse=[1.0, 1.0, 1.0], specular=[0.3, 0.3, 0.3],
+    )  # fmt: skip
+    return spec
+
+
+def gear_spec(path: Path = LOGO_PATH) -> mujoco.MjSpec:
+    """The gear as a free body whose origin is its circle centre (`gear_centre`)."""
+    shapes = trace_logo(path)
+    spec = mujoco.MjSpec()
+    body = spec.worldbody.add_body(name="gear")
+    body.add_freejoint(name="gear_free")
+    add_shape(spec, body, shapes[4], gear_centre(shapes), density=GEAR_DENSITY)
+    return spec
+
+
 def build_spec(path: Path = LOGO_PATH) -> mujoco.MjSpec:
     shapes = trace_logo(path)
     letters, gear = shapes[:4], shapes[4]
@@ -376,26 +467,8 @@ def build_spec(path: Path = LOGO_PATH) -> mujoco.MjSpec:
     world.add_geom(name="floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[20, 20, 0.1], material="floor",
                    friction=FRICTION)  # fmt: skip
 
-    def add_shape(parent, shape: Shape, origin, density: float) -> None:
-        mat = spec.add_material(
-            name=f"{shape.name}_mat", rgba=list(shape.rgba), specular=0.4, shininess=0.5
-        )
-        verts, faces = visual_mesh(shape.visual, origin)
-        mesh = spec.add_mesh(name=f"{shape.name}_visual", uservert=verts.ravel().tolist(),
-                             userface=faces.ravel().tolist())  # fmt: skip
-        mesh.inertia = mujoco.mjtMeshInertia.mjMESH_INERTIA_SHELL
-        parent.add_geom(name=f"{shape.name}_visual", type=mujoco.mjtGeom.mjGEOM_MESH, meshname=mesh.name,
-                        material=mat.name, contype=0, conaffinity=0, group=1, density=0)  # fmt: skip
-        for i, trap in enumerate(shape.collision):
-            piece = spec.add_mesh(
-                name=f"{shape.name}_col{i}",
-                uservert=prism(trap, origin).ravel().tolist(),
-            )
-            parent.add_geom(name=f"{shape.name}_col{i}", type=mujoco.mjtGeom.mjGEOM_MESH, meshname=piece.name,
-                            group=3, rgba=[0.8, 0.3, 0.3, 0.5], density=density, friction=FRICTION)  # fmt: skip
-
     for shape in letters:
-        add_shape(world, shape, (cx, 0.0), density=1000.0)
+        add_shape(spec, world, shape, (cx, 0.0), density=1000.0)
 
     # The gear's body sits at its outline's centre, so it tumbles about a sensible point.
     gx = float(np.mean([(t[1] + t[2] + t[4] + t[5]) / 4 for t in gear.visual]))
@@ -406,7 +479,7 @@ def build_spec(path: Path = LOGO_PATH) -> mujoco.MjSpec:
         name="gear", pos=[gx - cx, 0, start_z], quat=_euler_quat(GEAR_TILT)
     )
     body.add_freejoint(name="gear_free")
-    add_shape(body, gear, (gx, gz), density=GEAR_DENSITY)
+    add_shape(spec, body, gear, (gx, gz), density=GEAR_DENSITY)
 
     qpos = np.concatenate([[gx - cx, 0, start_z], _euler_quat(GEAR_TILT)])
     spec.add_key(name="home", qpos=qpos.tolist())

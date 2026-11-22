@@ -294,6 +294,8 @@ class Engine implements MjswanEngine {
         model: await resolveBytes(input.model),
         modelFormat: input.modelFormat,
         policy: input.policy ? await resolvePolicy(input.policy) : null,
+        companions: await Promise.all((input.companions ?? []).map(resolvePolicy)),
+        keepOnReset: input.keepOnReset ?? null,
         splat: input.splat ? await resolveSplat(input.splat) : null,
         skin: input.skin ? await resolveSkin(input.skin) : null,
         viewer: input.viewer ?? null,

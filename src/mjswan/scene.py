@@ -450,6 +450,10 @@ class SceneConfig:
     ``motion_file``, a task-side param injection) would be invisible to the other.
     Python-build-time-only state; never serialized."""
 
+    keep_on_reset: dict[str, list[str]] | None = None
+    """Entities an episode ending by one of the listed terminations leaves where they
+    are, set by :meth:`SceneHandle.keep_on_reset`."""
+
     mjlab_task_id: str | None = field(default=None, repr=False, compare=False)
     """The mjlab task id behind this scene, when it came from one.
 
@@ -684,6 +688,7 @@ class SceneHandle:
         initial_qvel: list[float] | None = None,
         extras: dict[str, Any] | None = None,
         default: bool = False,
+        companion: bool = False,
     ) -> PolicyHandle:
         """Add an ONNX policy to this scene.
 
@@ -741,6 +746,12 @@ class SceneHandle:
             initial_qpos: Initial qpos serialized into the policy config JSON.
             initial_qvel: Initial qvel serialized into the policy config JSON.
             extras: Extra JSON payload merged into the policy config.
+            default: Open the scene on this policy.
+            companion: Run this policy alongside whichever one is selected, every
+                control step, instead of listing it as a choice: a second robot in the
+                same scene. Its MDP must read and drive only its own entity, and a
+                companion cannot be the ``default``. Its terminations reset only its own
+                entity's joints, not the scene.
 
         Returns:
             PolicyHandle for configuring the policy (adding commands, etc.)
@@ -769,6 +780,11 @@ class SceneHandle:
         """
         if metadata is None:
             metadata = {}
+        if companion and default:
+            raise ValueError(
+                f"Policy {name!r} is a companion, which runs beside the selected policy "
+                "rather than being one of the choices, so it cannot be the default."
+            )
 
         given = {
             k: v
@@ -797,6 +813,13 @@ class SceneHandle:
                 terminations=terminations,
                 events=events,
             )
+        if companion:
+            if env_cfg is None:
+                raise ValueError(
+                    f"Companion policy {name!r} needs env_cfg=: its MDP is traced "
+                    "against an env of its own robot, not the scene task's."
+                )
+            mdp.trace_env_cfg = env_cfg
         self._resolve_mdp(
             mdp,
             env_cfg=env_cfg,
@@ -843,6 +866,7 @@ class SceneHandle:
             initial_qvel=initial_qvel,
             extras=extras,
             default=default,
+            companion=companion,
         )
         self._config.policies.append(policy_config)
         return PolicyHandle(policy_config, self)
@@ -1761,6 +1785,33 @@ class SceneHandle:
         """
         self._config.events = adapt_events(events)
         self._config.events_explicit = _explicit
+        return self
+
+    def keep_on_reset(
+        self, entities: Sequence[str], *, terminations: Sequence[str]
+    ) -> SceneHandle:
+        """Leave ``entities`` where they are when an episode ends by ``terminations``.
+
+        An episode's end normally puts the whole scene back to its keyframe. When every
+        termination that fired is one of ``terminations``, these entities' joints keep
+        their position and velocity instead, put back over the reset events too, while
+        everything else resets and the commands resample as usual. Any other
+        termination, and a reset someone asks for (the reset button, a policy switch),
+        resets them like the rest.
+
+        For a task whose episode ends on success: ``keep_on_reset(["robot"],
+        terminations=["kick_done"])`` has the next kick start wherever the robot is.
+
+        Args:
+            entities: Scene entity names (the ``robot`` of ``robot/<joint>``).
+            terminations: Termination term names, as the policy's MDP names them.
+        """
+        if not entities or not terminations:
+            raise ValueError("keep_on_reset needs at least one entity and termination.")
+        self._config.keep_on_reset = {
+            "entities": list(entities),
+            "terminations": list(terminations),
+        }
         return self
 
     def set_trace_env(self, env: Any) -> SceneHandle:

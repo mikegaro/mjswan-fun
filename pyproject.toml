@@ -133,6 +133,7 @@ eir = "mjswan.cli:eir"
 k1-kick = "mjswan.cli:k1_kick"
 eir-site = "mjswan.cli:eir_site"
 lira-logo = "mjswan.cli:lira_logo"
+lira-kick = "mjswan.cli:lira_kick"
 
 [dependency-groups]
 # pytest without any extra, for the `core` job: a group is locked like an extra, but is

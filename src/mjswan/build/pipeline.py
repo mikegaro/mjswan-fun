@@ -226,7 +226,7 @@ def write_app(
                 for mdp, mdp_id in zip(scene.mdps, scene.mdp_ids):
                     owners = [p for p in scene.policies if p.mdp is mdp]
                     steps.on(f"mdp/{mdp_id}")
-                    env = _scene_trace_env(scene)
+                    env = _mdp_trace_env(scene, mdp)
                     with mdp_episode_length(env, mdp.episode_length_s):
                         mdp_entries.append(
                             mdp_entry(
@@ -355,6 +355,19 @@ def _validate_muscle_action_terms(scene: SceneConfig) -> None:
 
     for term_name, cfg in muscle_terms:
         validate_muscle_actuators(model, cfg, term_name=term_name)
+
+
+def _mdp_trace_env(scene: SceneConfig, mdp: Any) -> Any | None:
+    """The env an MDP's terms are traced against: its own when it has a
+    ``trace_env_cfg`` (a companion's), else the scene's."""
+    if mdp.trace_env_cfg is None:
+        return _scene_trace_env(scene)
+    if mdp._trace_env is None:
+        from ..mjlab.env import build_mjlab_env
+
+        mdp._trace_env = build_mjlab_env(mdp.trace_env_cfg)
+        mdp._trace_env.reset()
+    return mdp._trace_env
 
 
 def _scene_trace_env(scene: SceneConfig) -> Any | None:

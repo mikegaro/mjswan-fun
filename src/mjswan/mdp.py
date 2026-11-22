@@ -64,6 +64,16 @@ class MdpConfig:
     """Seconds an episode lasts, which a time limit ends it at. ``None`` takes the
     ``env_cfg`` the first policy passes to ``add_policy``, else the scene's."""
 
+    trace_env_cfg: Any = field(default=None, repr=False, compare=False)
+    """An mjlab env config to trace this MDP's terms against instead of the scene's.
+
+    Set by :meth:`~mjswan.scene.SceneHandle.add_policy` for a companion, whose terms
+    read and drive a robot that is not the scene task's own: its own commands, its own
+    action width. Build-time only."""
+
+    _trace_env: Any = field(default=None, init=False, repr=False, compare=False)
+    """The env built from :attr:`trace_env_cfg`, once."""
+
     _adapted: bool = field(default=False, init=False, repr=False, compare=False)
     """Set once the first policy has filled and adapted this config on a scene."""
 

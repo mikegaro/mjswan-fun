@@ -534,6 +534,108 @@ class TestBuilderValidation:
         assert manifest["projects"][0]["scenes"][0]["control_dt"] == 0.05
 
 
+class TestCompanionPolicies:
+    """A companion runs beside the selected policy, so it is written apart from them."""
+
+    @staticmethod
+    def _env_cfg():
+        # Only what `add_policy` reads off an env config: its control rate.
+        return SimpleNamespace(sim=SimpleNamespace(mujoco=SimpleNamespace(timestep=0.05)),
+                               decimation=1)  # fmt: skip
+
+    def test_a_companion_is_written_to_companions_not_policies(
+        self, tmp_path, minimal_model, minimal_onnx, build_manifest, monkeypatch
+    ):
+        # Its MDP is empty, so nothing is traced and no env needs building.
+        monkeypatch.setattr("mjswan.build.pipeline._mdp_trace_env", lambda *_: None)
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.05
+        )
+        scene.add_policy(name="Walk", policy=minimal_onnx)
+        scene.add_policy(
+            name="G1 Walk",
+            policy=minimal_onnx,
+            env_cfg=self._env_cfg(),
+            observations={},
+            actions={},
+            terminations={},
+            commands={},
+            events={},
+            companion=True,
+        )
+        entry = build_manifest(builder, tmp_path / "out")["projects"][0]["scenes"][0]
+        assert [p["name"] for p in entry["policies"]] == ["Walk"]
+        assert [p["name"] for p in entry["companions"]] == ["G1 Walk"]
+        assert (tmp_path / "out" / "p" / "s" / "policy" / "g1_walk.onnx").exists()
+
+    def test_a_scene_without_companions_writes_no_key(
+        self, tmp_path, minimal_model, minimal_onnx, build_manifest
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.05
+        )
+        scene.add_policy(name="Walk", policy=minimal_onnx)
+        entry = build_manifest(builder, tmp_path / "out")["projects"][0]["scenes"][0]
+        assert "companions" not in entry
+
+    def test_keep_on_reset_reaches_the_scene_entry(
+        self, tmp_path, minimal_model, minimal_onnx, build_manifest, monkeypatch
+    ):
+        # The names are checked against the traced MDPs, which a plain scene cannot
+        # trace; that check has its own tests below.
+        monkeypatch.setattr(
+            "mjswan.build.manifest._check_keep_on_reset", lambda *_: None
+        )
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.05
+        )
+        scene.add_policy(name="Walk", policy=minimal_onnx)
+        scene.keep_on_reset(["robot"], terminations=["done"])
+        entry = build_manifest(builder, tmp_path / "out")["projects"][0]["scenes"][0]
+        assert entry["keep_on_reset"] == {
+            "entities": ["robot"],
+            "terminations": ["done"],
+        }
+
+    def test_keep_on_reset_accepts_a_termination_an_mdp_has(self):
+        from mjswan.build.manifest import _check_keep_on_reset
+
+        scene = SimpleNamespace(
+            name="S", keep_on_reset={"entities": ["robot"], "terminations": ["done"]}
+        )
+        _check_keep_on_reset(scene, [{"id": "m", "terminations": {"done": {}}}])
+        # A fused graph reports its lanes' names.
+        fused = {"__fused__": {"fused": "t.onnx", "lanes": [{"name": "done"}]}}
+        _check_keep_on_reset(scene, [{"id": "m", "terminations": fused}])
+
+    def test_keep_on_reset_refuses_a_termination_no_mdp_has(
+        self, tmp_path, minimal_model, minimal_onnx, build_manifest
+    ):
+        builder = Builder()
+        scene = builder.add_project(name="P").add_scene(
+            name="S", model=minimal_model, control_dt=0.05
+        )
+        scene.add_policy(name="Walk", policy=minimal_onnx)
+        scene.keep_on_reset(["robot"], terminations=["kick_done"])
+        with pytest.raises(ValueError, match="would never keep anything"):
+            build_manifest(builder, tmp_path / "out")
+
+    def test_a_companion_cannot_be_the_default(self, minimal_model, minimal_onnx):
+        scene = Builder().add_project(name="P").add_scene(name="S", model=minimal_model)
+        with pytest.raises(ValueError, match="cannot be the default"):
+            scene.add_policy(
+                name="G1", policy=minimal_onnx, companion=True, default=True
+            )
+
+    def test_a_companion_needs_its_own_env_cfg(self, minimal_model, minimal_onnx):
+        scene = Builder().add_project(name="P").add_scene(name="S", model=minimal_model)
+        with pytest.raises(ValueError, match="needs env_cfg="):
+            scene.add_policy(name="G1", policy=minimal_onnx, companion=True)
+
+
 # ===========================================================================
 # L1 — from_mjlab wiring (no mjlab/wandb required, dependencies monkeypatched)
 # ===========================================================================

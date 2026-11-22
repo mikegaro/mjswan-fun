@@ -312,6 +312,11 @@ class PolicyConfig:
     """``default`` was set by an ``add_policy_*`` call opening the scene on its latest
     checkpoint, not by the caller, so a ``default=True`` added later takes it over."""
 
+    companion: bool = False
+    """Runs alongside whichever policy is selected rather than being one of the choices:
+    a second robot with its own MDP in the same scene. Written to the scene's
+    ``companions``, not its ``policies``, so the policy selector never lists it."""
+
     def __post_init__(self) -> None:
         if not self.id:
             from .document.ids import name2id

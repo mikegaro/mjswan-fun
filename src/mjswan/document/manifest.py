@@ -53,7 +53,13 @@ MANIFEST_NAME = "manifest.json"
 #:
 #: 10: an action term may carry a DC motor's torque-speed curve (``saturation_effort``,
 #: ``velocity_limit``). An older engine would run those motors without it.
-DOCUMENT_FORMAT = 10
+#:
+#: 11: a scene may carry ``companions``, policies that run every control step beside the
+#: selected one, each driving its own robot through its own MDP, and ``keep_on_reset``,
+#: entities an episode ending by the listed terminations leaves where they are. An older
+#: engine would load the scene with that robot limp, and put those entities back at the
+#: start on every episode.
+DOCUMENT_FORMAT = 11
 
 #: Input slots the runtime fills itself rather than from an observation group: the
 #: recurrent carry (``is_init``, ``adapt_hx``) and the step counter (``time_step``).

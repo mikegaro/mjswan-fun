@@ -477,6 +477,11 @@ def lira_logo() -> None:
     _run_module("examples.demo.lira_logo")
 
 
+def lira_kick() -> None:
+    """`uv run lira-kick`: the K1 kicking through the LIRA logo's A, from a source checkout."""
+    _run_module("examples.demo.lira_kick")
+
+
 # ── info ──────────────────────────────────────────────────────
 
 

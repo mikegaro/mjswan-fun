@@ -43,6 +43,12 @@ function chainRecording(order: string[], overrides: Partial<ResetChain> = {}): R
 }
 
 describe('applyResetTerms', () => {
+  it('puts back what the reset keeps after the events, before anything reads the state', async () => {
+    const order: string[] = [];
+    await applyResetTerms(chainRecording(order, { afterEvents: () => order.push('keep') }));
+    expect(order).toEqual(['event', 'keep', 'policy', 'command']);
+  });
+
   it('runs event -> policy -> command, mjlab\'s _reset_idx order', async () => {
     const order: string[] = [];
     await applyResetTerms(chainRecording(order));

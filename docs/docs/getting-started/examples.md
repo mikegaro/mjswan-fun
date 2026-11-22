@@ -189,6 +189,51 @@ The browser UI shows a selector for choosing between policies at runtime. Pass
 `default=True` to pick which one loads first; it also takes over from the highest-step
 checkpoint an `add_policy_wandb` or `add_policy_hf` call would open.
 
+## A second robot with its own policy
+
+The selector runs one policy at a time. To run a second robot beside it, add that
+robot to the scene's task as another entity, and its policy with `companion=True`:
+
+```python
+scene = project.add_scene_mjlab(task_id, env_cfg=env_cfg_with_g1)  # entity "g1" added
+scene.add_policy_wandb(run_path)  # the selector's policies, for the task's robot
+
+scene.add_policy(
+    name="G1 Walk",
+    policy=g1_onnx,
+    env_cfg=g1_env_cfg,  # the G1's own task, its robot renamed to "g1"
+    policy_joint_names=["g1/left_hip_pitch_joint", ...],
+    companion=True,
+)
+```
+
+A companion is stepped every control step beside whichever policy is selected, and is
+never listed in the selector. It needs:
+
+- its own `env_cfg`, which its terms are traced against: every term reading or driving
+  the companion's entity, by its scene name, and the control rate the scene runs at;
+- joints carrying its entity prefix (`g1/...`), which its reset is scoped to;
+- no events (`events={}`): its robot starts from the scene's keyframe.
+
+Its own termination resets only its robot. The selected policy's episode ending keeps the
+companion's robot where it is; the reset button resets both.
+`examples/demo/lira_kick.py` is a complete example.
+
+## Keeping entities when an episode ends
+
+An episode's end puts the whole scene back to its keyframe. For a task whose episode ends
+on success, such as a kick, it can instead keep some entities where they are:
+
+```python
+scene.keep_on_reset(["robot"], terminations=["kick_done", "time_out"])
+```
+
+When every termination that fired is one of these, the listed entities keep their joints'
+position and velocity, over the reset events too, while the rest resets and the commands
+resample. A command can then place a new ball around the robot as it stands. Any other
+termination (a fall), and the reset button, resets them like everything else. The build
+refuses a termination name no policy's MDP has.
+
 ## Custom command inputs
 
 Each value in `commands={...}` is a `CommandTermConfig` built with
