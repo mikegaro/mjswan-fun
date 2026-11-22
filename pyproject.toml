@@ -127,6 +127,12 @@ examples = [
 
 [project.scripts]
 mjswan = "mjswan.cli:app"
+# Source-checkout shortcuts to demos under examples/ (`uv run eir`); a wheel has no
+# examples/, so there they fail.
+eir = "mjswan.cli:eir"
+k1-kick = "mjswan.cli:k1_kick"
+eir-site = "mjswan.cli:eir_site"
+lira-logo = "mjswan.cli:lira_logo"
 
 [dependency-groups]
 # pytest without any extra, for the `core` job: a group is locked like an extra, but is

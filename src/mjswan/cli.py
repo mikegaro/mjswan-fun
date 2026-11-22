@@ -457,6 +457,26 @@ def demo_cmd(
     _run_module(_DEMOS[name][0])
 
 
+def eir() -> None:
+    """`uv run eir`: the EIR course demo, from a source checkout."""
+    _run_module("examples.demo.eir_course")
+
+
+def k1_kick() -> None:
+    """`uv run k1-kick`: the Booster K1 kick demo, from a source checkout."""
+    _run_module("examples.demo.k1_kick")
+
+
+def eir_site() -> None:
+    """`uv run eir-site`: the EIR course and K1 kick demos as one site."""
+    _run_module("examples.demo.eir_site")
+
+
+def lira_logo() -> None:
+    """`uv run lira-logo`: the LIRA logo drop demo, from a source checkout."""
+    _run_module("examples.demo.lira_logo")
+
+
 # ── info ──────────────────────────────────────────────────────
 
 

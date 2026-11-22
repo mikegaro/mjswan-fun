@@ -47,6 +47,8 @@ examples/**/.cache/
 
 # Artifacts
 dist/
+# The EIR course site (examples/demo/eir_site.py), published from gh-pages.
+examples/demo/site/
 logs/
 artifacts/
 
