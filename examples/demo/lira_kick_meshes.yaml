@@ -1,0 +1,41 @@
+# Mesh detail for the LIRA Kick demo (examples/demo/mesh_lod.py).
+#
+# Meshes only drawn are decimated with these settings; meshes that collide are
+# replaced by their convex hull, which is the shape MuJoCo collides against, so the
+# collision geometry is unchanged. Every mesh is then stored inline (shared vertices,
+# rounded to `vertex_precision`) instead of as STL.
+#
+# Level chosen from side-by-side renders: "aggressive", scene.mjz 13.2 MB -> 1.2 MB
+# (629k -> 148k faces). Up close the K1 head top and the G1 hip covers show slight
+# facets; at the demo's camera distance it is indistinguishable from the original.
+
+# fast-simplification's `agg`: lower keeps the shape better at the same face count
+# (its default, 7, tears thin parts such as the G1 waist ring).
+aggressiveness: 3
+
+# Fraction of faces removed on ordinary parts.
+target_reduction: 0.92
+
+# Meshes with at most `min_faces` faces are kept as they are; none is decimated below
+# it, nor kept above `max_faces`.
+min_faces: 2000
+max_faces: 6000
+
+# Vertex rounding in metres; 1e-5 (10 µm) is far below anything visible.
+vertex_precision: 1.0e-5
+
+# Per mesh file (as named in the robot's MJCF). Heads and torsos are what people look
+# at, so they keep more detail; the logos are never decimated.
+overrides:
+  # Booster K1
+  Head_1.STL: {target_reduction: 0.75, max_faces: 8000}
+  Head_2.STL: {target_reduction: 0.75, max_faces: 8000}
+  Trunk_1.STL: {target_reduction: 0.75, max_faces: 8000}
+  Trunk_2.STL: {target_reduction: 0.75, max_faces: 8000}
+  K1logo.STL: {target_reduction: 0.0}
+  # Unitree G1
+  head_link.STL: {target_reduction: 0.75, max_faces: 8000}
+  torso_link.STL: {target_reduction: 0.75, max_faces: 8000}
+  pelvis_contour_link.STL: {target_reduction: 0.85, max_faces: 6000}
+  waist_yaw_link.STL: {target_reduction: 0.5}
+  logo_link.STL: {target_reduction: 0.0}
