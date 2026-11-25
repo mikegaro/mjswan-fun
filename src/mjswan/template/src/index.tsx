@@ -1,3 +1,5 @@
+// First, so the engine's wasm is fetched gzipped: see wasmGz.ts.
+import './wasmGz';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';

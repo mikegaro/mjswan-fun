@@ -110,6 +110,7 @@ dev = [
 
 # What `examples/demo/main.py` imports; the deploy workflow installs this alone.
 demo = [
+    "fast-simplification>=0.2.0",
     "mjswan[hf,mjlab]",
     # Registers WBC-Mjlab's `Wbc-*` tasks with mjlab, for the Showcase's Humanoid skins.
     "wbc-mjlab>=0.0.6",

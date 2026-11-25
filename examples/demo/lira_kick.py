@@ -57,7 +57,7 @@ from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.tasks.registry import load_env_cfg
 
 import mjswan
-from examples.demo import k1_kick, lira_logo
+from examples.demo import k1_kick, lira_logo, mesh_lod
 from mjswan.mjlab.runner import create_pt_onnx_export_context, export_checkpoint
 
 #: Where the letters' front face is (m along +x). The ball spawns at most 2 m from the
@@ -66,6 +66,8 @@ LOGO_FRONT_X = 3.0
 #: The K1's episode ends that leave it, and the gear, where they are: the kick is over,
 #: or out of time. Falling over (``fell_over``) resets the scene.
 KEEP_ON = ("kick_done", "time_out")
+# Mesh detail for the browser build (see mesh_lod.py).
+MESH_CONFIG = Path(__file__).with_name("lira_kick_meshes.yaml")
 #: Extra contact slots for the ball, robot and gear against the logo's convex pieces.
 LOGO_CONTACTS = 120
 
@@ -531,6 +533,13 @@ def add_projects(builder: mjswan.Builder) -> None:
             azimuth=30.0,
             origin_type=mjswan.ViewerConfig.OriginType.WORLD,
         )
+    )
+    # The robots' CAD meshes are most of the download: decimate the drawn ones and hull
+    # the colliding ones (examples/demo/lira_kick_meshes.yaml). Done on the scene's spec
+    # itself, which SceneHandle does not expose; policies trace their own env.
+    stats = mesh_lod.lighten_meshes(scene._config.spec, MESH_CONFIG)
+    print(
+        f"Meshes: {stats.faces_before} -> {stats.faces_after} faces over {stats.meshes} meshes"
     )
     scene.add_policy_wandb(k1_kick.WANDB_RUN)
     # A kick ending (or running out of time) moves on to the next ball from where the

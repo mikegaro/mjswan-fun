@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import path from 'path';
 import fs from 'fs';
+import zlib from 'zlib';
 import postcss from 'postcss';
 import { minify } from './vite.shared';
 
@@ -130,6 +131,29 @@ function mantineNamesInUse(): Set<string> {
 // Drops each `@mantine/core/styles.css` rule no component in use names, before Vite hashes
 // the CSS. Not Mantine's per-component files: they size in px where styles.css scales by
 // rem, which index.css's root font size relies on.
+/**
+ * Writes `<name>.wasm.gz` beside every emitted wasm, for hosts that serve files as they
+ * are: `src/wasmGz.ts` fetches these and unpacks them in the page. The originals stay, as
+ * its fallback.
+ */
+function gzipWasmPlugin(): Plugin {
+  return {
+    name: 'mjswan-gzip-wasm',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (output.type !== 'asset' || !fileName.endsWith('.wasm')) continue;
+        const source = typeof output.source === 'string' ? Buffer.from(output.source) : output.source;
+        this.emitFile({
+          type: 'asset',
+          fileName: `${fileName}.gz`,
+          source: zlib.gzipSync(source, { level: 9 }),
+        });
+      }
+    },
+  };
+}
+
 function mantineCssPlugin(): Plugin {
   let used = new Set<string>();
   const unused = (names: string[]) => names.length > 0 && names.every((name) => !used.has(name));
@@ -223,6 +247,7 @@ export default defineConfig({
     gtmPlugin(process.env.MJSWAN_GTM_ID),
     mantineCssPlugin(),
     thirdPartyLicensesPlugin(),
+    gzipWasmPlugin(),
   ],
   base: process.env.MJSWAN_BASE_PATH || '/',
   define: {
