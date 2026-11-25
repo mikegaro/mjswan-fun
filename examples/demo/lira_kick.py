@@ -527,9 +527,9 @@ def add_projects(builder: mjswan.Builder) -> None:
         mjswan.ViewerConfig(
             # From the K1's side, a little to its right, looking on past the logo
             # (the azimuth is the direction the camera looks).
-            lookat=(3.0, 0.5, 0.5),
-            distance=9.0,
-            elevation=-25.0,
+            lookat=(3.175, 0.55, 0.6),
+            distance=5.5,
+            elevation=-15.0,
             azimuth=30.0,
             origin_type=mjswan.ViewerConfig.OriginType.WORLD,
         )
