@@ -541,7 +541,8 @@ def add_projects(builder: mjswan.Builder) -> None:
     print(
         f"Meshes: {stats.faces_before} -> {stats.faces_after} faces over {stats.meshes} meshes"
     )
-    scene.add_policy_wandb(k1_kick.WANDB_RUN)
+    # Only the final checkpoint: the site ships one kick policy, not every one logged.
+    scene.add_policy_wandb(k1_kick.WANDB_RUN, last_checkpoint_only=True)
     # A kick ending (or running out of time) moves on to the next ball from where the
     # K1 is, the gear staying where it landed; a fall resets everything.
     scene.keep_on_reset(["robot", "gear"], terminations=KEEP_ON)

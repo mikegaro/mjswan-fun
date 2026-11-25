@@ -172,11 +172,14 @@ def fetch_motion_npz_from_artifact(
 
 
 @contextlib.contextmanager
-def fetch_checkpoints(run_path: str) -> Iterator[list[tuple[str, Path]]]:
+def fetch_checkpoints(
+    run_path: str, *, last_only: bool = False
+) -> Iterator[list[tuple[str, Path]]]:
     """Every ``model_*.pt`` of a run as ``(name, path)`` pairs, sorted by training step.
 
     The files sit in a temporary directory that lives for the ``with`` block. The sort
-    is numeric: ``model_50`` before ``model_100``.
+    is numeric: ``model_50`` before ``model_100``. With ``last_only``, only the
+    checkpoint of the highest step is downloaded and returned.
 
     Raises:
         ValueError: If the run holds no ``model_*.pt`` file.
@@ -188,6 +191,8 @@ def fetch_checkpoints(run_path: str) -> Iterator[list[tuple[str, Path]]]:
     if not pt_files:
         raise ValueError(f"No model_*.pt files found in W&B run: {run_path}")
     pt_files.sort(key=lambda f: int(re.search(r"\d+", f.name).group()))  # type: ignore[union-attr]
+    if last_only:
+        pt_files = pt_files[-1:]
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         checkpoints: list[tuple[str, Path]] = []

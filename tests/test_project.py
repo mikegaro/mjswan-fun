@@ -948,8 +948,9 @@ def _fake_checkpoints(*names: str):
     downloaded, with nothing behind the paths (the export is faked too)."""
 
     @contextlib.contextmanager
-    def fetch(run_path: str):
-        yield [(name, Path(f"{name}.pt")) for name in names]
+    def fetch(run_path: str, *, last_only: bool = False):
+        kept = names[-1:] if last_only else names
+        yield [(name, Path(f"{name}.pt")) for name in kept]
 
     return fetch
 

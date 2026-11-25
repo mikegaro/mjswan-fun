@@ -876,6 +876,7 @@ class SceneHandle:
         run_path: str | list[str],
         *,
         only_latest: bool = False,
+        last_checkpoint_only: bool = False,
         task_id: str | None = None,
         config_path: str | None = None,
         metadata: dict[str, Any] | None = None,
@@ -907,6 +908,9 @@ class SceneHandle:
                 ``mjlab`` and ``torch`` to be installed and ``task_id`` to be
                 provided.  If ``True``, fetches only the ``.onnx`` file from
                 each run (the latest exported checkpoint).
+            last_checkpoint_only: With ``only_latest=False``, fetch and convert only
+                the ``model_*.pt`` of the highest training step from each run instead of
+                every one, so a site ships a single policy per run.
             task_id: mjlab task identifier (e.g. ``"go2_flat"``). Defaults to the
                 scene's task when it came from :meth:`ProjectHandle.add_scene_mjlab`,
                 so it only has to be given for a plain scene. Required when
@@ -1142,7 +1146,9 @@ class SceneHandle:
                     try:
                         for path in run_paths:
                             on_run(path.rsplit("/", 1)[-1])
-                            with source.wandb.fetch_checkpoints(path) as checkpoints:
+                            with source.wandb.fetch_checkpoints(
+                                path, last_only=last_checkpoint_only
+                            ) as checkpoints:
                                 for name, pt_path in checkpoints:
                                     if name in seen_names:
                                         _warn_resumed_checkpoint(
